@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { AlertTriangle, Trash2, Eye, CheckCircle, XCircle, RefreshCw, Database, Zap, Settings, Play, Pause } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { validateQuestionWithAI, validateQuestionComprehensively, ExtractedQuestion } from '../lib/gemini';
+import { validateQuestionWithGeminiAI, ExtractedQuestion } from '../lib/gemini';
 import { QuestionPreview } from './QuestionPreview';
 import toast, { Toaster } from 'react-hot-toast';
 
@@ -16,7 +16,7 @@ interface Course {
   exam_id: string;
 }
 
-interface WrongQuestion {
+interface QuestionToValidate {
   id: string;
   topic_id: string;
   topic_name: string;
@@ -26,15 +26,15 @@ interface WrongQuestion {
   answer: string | null;
   solution: string | null;
   created_at: string;
-  reason: string;
-  confidence: number;
+  is_wrong: boolean | null;
 }
 
 interface ValidationProgress {
   currentQuestion: number;
   totalQuestions: number;
   questionsValidated: number;
-  questionsRemoved: number;
+  questionsMarkedWrong: number;
+  questionsMarkedCorrect: number;
   isValidating: boolean;
   isPaused: boolean;
   currentQuestionText: string;
@@ -45,8 +45,8 @@ export function WrongQuestionRemover() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedExam, setSelectedExam] = useState<string>('');
   const [selectedCourse, setSelectedCourse] = useState<string>('');
-  const [validationMode, setValidationMode] = useState<'auto' | 'manual'>('manual');
-  const [wrongQuestions, setWrongQuestions] = useState<WrongQuestion[]>([]);
+  const [wrongQuestions, setWrongQuestions] = useState<QuestionToValidate[]>([]);
+  const [correctQuestions, setCorrectQuestions] = useState<QuestionToValidate[]>([]);
   const [totalQuestions, setTotalQuestions] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(false);
   
@@ -54,7 +54,8 @@ export function WrongQuestionRemover() {
     currentQuestion: 0,
     totalQuestions: 0,
     questionsValidated: 0,
-    questionsRemoved: 0,
+    questionsMarkedWrong: 0,
+    questionsMarkedCorrect: 0,
     isValidating: false,
     isPaused: false,
     currentQuestionText: ''
@@ -140,101 +141,6 @@ export function WrongQuestionRemover() {
     }
   }, [selectedCourse]);
 
-  const validateQuestion = (question: any): { isWrong: boolean; reason: string; confidence: number } => {
-    const { question_type, question_statement, options, answer } = question;
-
-    if (!question_statement || question_statement.trim() === '') {
-      return { isWrong: true, reason: 'Empty question statement', confidence: 1.0 };
-    }
-
-    if (!answer || answer.trim() === '') {
-      return { isWrong: true, reason: 'No answer provided', confidence: 1.0 };
-    }
-
-    switch (question_type) {
-      case 'MCQ':
-        return validateMCQQuestion(options, answer);
-      case 'MSQ':
-        return validateMSQQuestion(options, answer);
-      case 'NAT':
-        return validateNATQuestion(answer);
-      case 'Subjective':
-        return { isWrong: false, reason: 'Subjective questions are always valid', confidence: 1.0 };
-      default:
-        return { isWrong: true, reason: 'Unknown question type', confidence: 1.0 };
-    }
-  };
-
-  const validateMCQQuestion = (options: string[] | null, answer: string): { isWrong: boolean; reason: string; confidence: number } => {
-    if (!options || options.length === 0) {
-      return { isWrong: true, reason: 'No options provided for MCQ', confidence: 1.0 };
-    }
-
-    const cleanAnswer = answer.trim().toUpperCase();
-    const validOptions = ['A', 'B', 'C', 'D', 'E'];
-    
-    // Check if answer is a valid option letter
-    if (!validOptions.includes(cleanAnswer)) {
-      return { isWrong: true, reason: `Answer "${answer}" is not a valid option (A, B, C, D, E)`, confidence: 1.0 };
-    }
-    
-    // Check if the option index exists
-    const optionIndex = cleanAnswer.charCodeAt(0) - 65; // A=0, B=1, C=2, D=3
-    if (optionIndex >= options.length) {
-      return { isWrong: true, reason: `Answer "${answer}" refers to option ${optionIndex + 1} but only ${options.length} options provided`, confidence: 1.0 };
-    }
-
-    // For MCQ, only one option should be correct
-    const answerOptions = cleanAnswer.split(',').map(opt => opt.trim());
-    if (answerOptions.length > 1) {
-      return { isWrong: true, reason: 'MCQ should have only one correct answer', confidence: 1.0 };
-    }
-
-    return { isWrong: false, reason: 'Valid MCQ question', confidence: 1.0 };
-  };
-
-  const validateMSQQuestion = (options: string[] | null, answer: string): { isWrong: boolean; reason: string; confidence: number } => {
-    if (!options || options.length === 0) {
-      return { isWrong: true, reason: 'No options provided for MSQ', confidence: 1.0 };
-    }
-
-    const cleanAnswer = answer.trim().toUpperCase();
-    const answerOptions = cleanAnswer.split(',').map(opt => opt.trim());
-    const validOptions = ['A', 'B', 'C', 'D', 'E'];
-    
-    // Check if all answer options are valid letters
-    for (const opt of answerOptions) {
-      if (!validOptions.includes(opt)) {
-        return { isWrong: true, reason: `Answer option "${opt}" is not valid (A, B, C, D, E)`, confidence: 1.0 };
-      }
-      
-      // Check if the option index exists
-      const optionIndex = opt.charCodeAt(0) - 65;
-      if (optionIndex >= options.length) {
-        return { isWrong: true, reason: `Answer option "${opt}" refers to option ${optionIndex + 1} but only ${options.length} options provided`, confidence: 1.0 };
-      }
-    }
-
-    // MSQ should have at least 1 correct option
-    if (answerOptions.length === 0) {
-      return { isWrong: true, reason: 'MSQ should have at least 1 correct option', confidence: 1.0 };
-    }
-
-    return { isWrong: false, reason: 'Valid MSQ question', confidence: 1.0 };
-  };
-
-  const validateNATQuestion = (answer: string): { isWrong: boolean; reason: string; confidence: number } => {
-    const cleanAnswer = answer.trim();
-    
-    // Check if answer is a number (integer or decimal)
-    const numberRegex = /^-?\d+(\.\d+)?$/;
-    if (!numberRegex.test(cleanAnswer)) {
-      return { isWrong: true, reason: `NAT answer "${answer}" is not a valid number`, confidence: 1.0 };
-    }
-
-    return { isWrong: false, reason: 'Valid NAT question', confidence: 1.0 };
-  };
-
   const startValidation = async () => {
     if (!selectedCourse) {
       toast.error('Please select a course first');
@@ -245,11 +151,15 @@ export function WrongQuestionRemover() {
       currentQuestion: 0,
       totalQuestions: 0,
       questionsValidated: 0,
-      questionsRemoved: 0,
+      questionsMarkedWrong: 0,
+      questionsMarkedCorrect: 0,
       isValidating: true,
       isPaused: false,
       currentQuestionText: ''
     });
+
+    setWrongQuestions([]);
+    setCorrectQuestions([]);
 
     try {
       // First get all topic IDs for the selected course
@@ -271,7 +181,7 @@ export function WrongQuestionRemover() {
       // Then get all questions for these topics
       const { data: questions, error } = await supabase
         .from('new_questions')
-        .select('*, topics(id, name)')
+        .select('*')
         .in('topic_id', topicIds);
 
       if (error) throw error;
@@ -284,23 +194,22 @@ export function WrongQuestionRemover() {
 
       setProgress(prev => ({ ...prev, totalQuestions: questions.length }));
       
-      const wrongQuestionsFound: WrongQuestion[] = [];
-      let questionsRemoved = 0;
+      const wrongQuestionsFound: QuestionToValidate[] = [];
+      const correctQuestionsFound: QuestionToValidate[] = [];
+      let questionsMarkedWrong = 0;
+      let questionsMarkedCorrect = 0;
 
       for (let i = 0; i < questions.length; i++) {
         const question = questions[i];
 
-        if (progress.isPaused) {
-          await new Promise(resolve => {
-            const checkPause = () => {
-              if (!progress.isPaused) {
-                resolve(undefined);
-              } else {
-                setTimeout(checkPause, 1000);
-              }
-            };
-            checkPause();
-          });
+        // Check if validation is paused
+        while (progress.isPaused) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        // Check if validation was stopped
+        if (!progress.isValidating) {
+          break;
         }
 
         setProgress(prev => ({
@@ -310,76 +219,61 @@ export function WrongQuestionRemover() {
           currentQuestionText: question.question_statement.substring(0, 100) + '...'
         }));
 
-        let finalValidation;
-        
-        // Use AI validation for all question types except Subjective
-        if (question.question_type === 'Subjective') {
-          // Subjective questions are always considered valid
-          finalValidation = { isWrong: false, reason: 'Subjective questions are always valid', confidence: 1.0 };
-        } else {
-          // Use comprehensive AI validation for MCQ, MSQ, and NAT
-          try {
-            toast(`🤖 AI validating ${question.question_type} question ${i + 1}...`, { duration: 2000 });
-            const aiValidation = await validateQuestionComprehensively(question);
-            finalValidation = aiValidation;
-            
-            // Add delay for AI calls
-            await new Promise(resolve => setTimeout(resolve, 3000));
-          } catch (error) {
-            console.error('AI validation failed:', error);
-            // Fall back to basic validation if AI fails
-            const basicValidation = validateQuestion(question);
-            finalValidation = basicValidation;
-          }
-        }
-
-        if (finalValidation.isWrong) {
-          const wrongQuestion: WrongQuestion = {
-            ...question,
-            reason: finalValidation.reason,
-            confidence: finalValidation.confidence
-          };
+        try {
+          toast(`🤖 AI validating ${question.question_type} question ${i + 1}/${questions.length}...`, { duration: 2000 });
           
-          wrongQuestionsFound.push(wrongQuestion);
+          // Use comprehensive Gemini AI validation
+          const validation = await validateQuestionWithGeminiAI(question);
+          
+          // Update the is_wrong column in database
+          const { error: updateError } = await supabase
+            .from('new_questions')
+            .update({ is_wrong: validation.isWrong })
+            .eq('id', question.id);
 
-          if (validationMode === 'auto') {
-            // Auto-delete wrong questions
-            try {
-              const { error: deleteError } = await supabase
-                .from('new_questions')
-                .delete()
-                .eq('id', question.id);
-
-              if (deleteError) {
-                console.error('Error deleting question:', deleteError);
-                toast.error(`Failed to delete question ${i + 1}`);
-              } else {
-                questionsRemoved++;
-                toast.success(`❌ Deleted wrong question ${i + 1}: ${finalValidation.reason}`);
-              }
-            } catch (error) {
-              console.error('Error deleting question:', error);
-            }
+          if (updateError) {
+            console.error('Error updating question:', updateError);
+            toast.error(`Failed to update question ${i + 1}`);
           } else {
-            toast.error(`❌ Found wrong question ${i + 1}: ${finalValidation.reason}`);
+            if (validation.isWrong) {
+              questionsMarkedWrong++;
+              wrongQuestionsFound.push({
+                ...question,
+                is_wrong: true
+              });
+              toast.error(`❌ Question ${i + 1} marked as WRONG: ${validation.reason}`);
+            } else {
+              questionsMarkedCorrect++;
+              correctQuestionsFound.push({
+                ...question,
+                is_wrong: false
+              });
+              toast.success(`✅ Question ${i + 1} marked as CORRECT`);
+            }
           }
-        } else {
-          toast.success(`✅ Question ${i + 1} is valid`);
+
+          setProgress(prev => ({
+            ...prev,
+            questionsMarkedWrong,
+            questionsMarkedCorrect
+          }));
+
+          // Add delay between AI calls to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 8000));
+
+        } catch (error) {
+          console.error(`Error validating question ${i + 1}:`, error);
+          toast.error(`Failed to validate question ${i + 1}: ${error.message}`);
+          
+          // Add longer delay on error
+          await new Promise(resolve => setTimeout(resolve, 5000));
         }
-
-        setProgress(prev => ({ ...prev, questionsRemoved }));
-
-        // Delay between questions
-        await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
       setWrongQuestions(wrongQuestionsFound);
+      setCorrectQuestions(correctQuestionsFound);
       
-      if (validationMode === 'auto') {
-        toast.success(`🎉 Validation complete! Removed ${questionsRemoved} wrong questions out of ${questions.length} total questions.`);
-      } else {
-        toast.success(`🎉 Validation complete! Found ${wrongQuestionsFound.length} wrong questions out of ${questions.length} total questions.`);
-      }
+      toast.success(`🎉 Validation complete! Marked ${questionsMarkedWrong} questions as WRONG and ${questionsMarkedCorrect} as CORRECT out of ${questions.length} total questions.`);
 
     } catch (error) {
       console.error('Validation error:', error);
@@ -399,24 +293,7 @@ export function WrongQuestionRemover() {
     toast('🛑 Validation stopped');
   };
 
-  const deleteWrongQuestion = async (questionId: string) => {
-    try {
-      const { error } = await supabase
-        .from('new_questions')
-        .delete()
-        .eq('id', questionId);
-
-      if (error) throw error;
-
-      setWrongQuestions(prev => prev.filter(q => q.id !== questionId));
-      toast.success('Wrong question deleted successfully');
-    } catch (error) {
-      console.error('Error deleting question:', error);
-      toast.error('Failed to delete question');
-    }
-  };
-
-  const deleteAllWrongQuestions = async () => {
+  const deleteWrongQuestions = async () => {
     if (wrongQuestions.length === 0) {
       toast.error('No wrong questions to delete');
       return;
@@ -434,9 +311,67 @@ export function WrongQuestionRemover() {
 
       toast.success(`🎉 Deleted all ${wrongQuestions.length} wrong questions!`);
       setWrongQuestions([]);
+      
+      // Reload question count
+      loadQuestionsCount();
     } catch (error) {
       console.error('Error deleting questions:', error);
       toast.error('Failed to delete wrong questions');
+    }
+  };
+
+  const loadValidatedQuestions = async () => {
+    if (!selectedCourse) {
+      toast.error('Please select a course first');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      // Get all topic IDs for the selected course
+      const { data: topics, error: topicsError } = await supabase
+        .from('topics')
+        .select('id, name, chapters!inner(course_id)')
+        .eq('chapters.course_id', selectedCourse);
+      
+      if (topicsError) throw topicsError;
+      
+      if (!topics || topics.length === 0) {
+        toast.error('No topics found for this course');
+        return;
+      }
+      
+      const topicIds = topics.map(topic => topic.id);
+      
+      // Get wrong questions
+      const { data: wrongQs, error: wrongError } = await supabase
+        .from('new_questions')
+        .select('*')
+        .in('topic_id', topicIds)
+        .eq('is_wrong', true);
+
+      if (wrongError) throw wrongError;
+
+      // Get correct questions (limit to 50 for display)
+      const { data: correctQs, error: correctError } = await supabase
+        .from('new_questions')
+        .select('*')
+        .in('topic_id', topicIds)
+        .eq('is_wrong', false)
+        .limit(50);
+
+      if (correctError) throw correctError;
+
+      setWrongQuestions(wrongQs || []);
+      setCorrectQuestions(correctQs || []);
+      
+      toast.success(`Loaded ${wrongQs?.length || 0} wrong questions and ${correctQs?.length || 0} correct questions`);
+
+    } catch (error) {
+      console.error('Error loading validated questions:', error);
+      toast.error('Failed to load validated questions');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -455,32 +390,32 @@ export function WrongQuestionRemover() {
             </div>
           </div>
           <h1 className="text-4xl font-bold bg-gradient-to-r from-red-600 to-orange-600 bg-clip-text text-transparent mb-4">
-            Wrong Question Remover
+            AI Question Validator
           </h1>
           <p className="text-xl text-gray-600 max-w-3xl mx-auto">
-            Validate questions in the database and remove incorrect ones automatically or manually review them
+            Validate questions using comprehensive AI analysis and mark them as correct or wrong in the database
           </p>
           
           {/* Features */}
           <div className="flex items-center justify-center gap-8 mt-8 text-sm text-gray-500">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-red-500" />
-              <span>Smart Validation</span>
+              <span>Comprehensive AI Validation</span>
             </div>
             <div className="flex items-center gap-2">
               <Zap className="w-5 h-5 text-orange-500" />
-              <span>AI-Powered NAT Check</span>
+              <span>Round-Robin API Keys</span>
             </div>
             <div className="flex items-center gap-2">
               <Database className="w-5 h-5 text-blue-500" />
-              <span>Auto/Manual Mode</span>
+              <span>is_wrong Column Update</span>
             </div>
           </div>
         </div>
 
         {/* Configuration Form */}
         <div className="bg-white rounded-2xl shadow-xl p-8 mb-8">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
             {/* Exam Selection */}
             <div>
               <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-3">
@@ -521,36 +456,6 @@ export function WrongQuestionRemover() {
                 ))}
               </select>
             </div>
-
-            {/* Validation Mode */}
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-3">
-                <Settings className="w-4 h-4" />
-                Validation Mode
-              </label>
-              <div className="space-y-2">
-                <label className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    value="manual"
-                    checked={validationMode === 'manual'}
-                    onChange={(e) => setValidationMode(e.target.value as any)}
-                    className="w-4 h-4 text-red-600 border-gray-300 focus:ring-red-500"
-                  />
-                  <span className="text-sm">Manual Review (Show wrong questions)</span>
-                </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    value="auto"
-                    checked={validationMode === 'auto'}
-                    onChange={(e) => setValidationMode(e.target.value as any)}
-                    className="w-4 h-4 text-red-600 border-gray-300 focus:ring-red-500"
-                  />
-                  <span className="text-sm">Auto Delete (Remove wrong questions immediately)</span>
-                </label>
-              </div>
-            </div>
           </div>
 
           {/* Course Statistics */}
@@ -564,12 +469,12 @@ export function WrongQuestionRemover() {
                     <span className="text-blue-700">Total Questions: <strong>{totalQuestions}</strong></span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Settings className="w-4 h-4 text-blue-600" />
-                    <span className="text-blue-700">Mode: <strong>{validationMode === 'auto' ? 'Auto Delete' : 'Manual Review'}</strong></span>
+                    <Zap className="w-4 h-4 text-blue-600" />
+                    <span className="text-blue-700">AI Validation: <strong>Comprehensive</strong></span>
                   </div>
                   <div className="flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4 text-blue-600" />
-                    <span className="text-blue-700">AI Validation: <strong>Enabled for NAT</strong></span>
+                    <span className="text-blue-700">Updates: <strong>is_wrong column</strong></span>
                   </div>
                 </div>
               </div>
@@ -580,14 +485,25 @@ export function WrongQuestionRemover() {
         {/* Validation Controls */}
         <div className="flex gap-4 justify-center mb-8">
           {!progress.isValidating ? (
-            <button
-              onClick={startValidation}
-              disabled={!canStartValidation}
-              className="flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-red-600 to-orange-600 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-            >
-              <Play className="w-5 h-5" />
-              {validationMode === 'auto' ? '🚀 Start Auto Validation' : '🔍 Start Manual Validation'}
-            </button>
+            <div className="flex gap-4">
+              <button
+                onClick={startValidation}
+                disabled={!canStartValidation}
+                className="flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-red-600 to-orange-600 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+              >
+                <Play className="w-5 h-5" />
+                🚀 Start AI Validation
+              </button>
+              
+              <button
+                onClick={loadValidatedQuestions}
+                disabled={!selectedCourse || isLoading}
+                className="flex items-center gap-3 px-6 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+              >
+                <Eye className="w-5 h-5" />
+                {isLoading ? 'Loading...' : 'Load Validated Questions'}
+              </button>
+            </div>
           ) : (
             <div className="flex gap-4">
               <button
@@ -614,7 +530,7 @@ export function WrongQuestionRemover() {
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-lg font-medium text-red-900">
-                  🔍 Validating Questions
+                  🤖 AI Validating Questions
                   {progress.isPaused && ' (Paused)'}
                 </h3>
                 <span className="text-sm font-medium text-red-700">
@@ -642,45 +558,71 @@ export function WrongQuestionRemover() {
               </div>
               <div className="flex items-center gap-2">
                 <XCircle className="w-4 h-4 text-red-600" />
-                <span className="text-red-700">Wrong Found: {wrongQuestions.length}</span>
+                <span className="text-red-700">Marked Wrong: {progress.questionsMarkedWrong}</span>
               </div>
               <div className="flex items-center gap-2">
-                <Trash2 className="w-4 h-4 text-orange-600" />
-                <span className="text-orange-700">Removed: {progress.questionsRemoved}</span>
+                <CheckCircle className="w-4 h-4 text-blue-600" />
+                <span className="text-blue-700">Marked Correct: {progress.questionsMarkedCorrect}</span>
               </div>
             </div>
           </div>
         )}
 
-        {/* Wrong Questions Display (Manual Mode) */}
-        {validationMode === 'manual' && wrongQuestions.length > 0 && (
-          <div className="bg-white rounded-2xl shadow-xl p-8">
+        {/* Results Summary */}
+        {!progress.isValidating && (wrongQuestions.length > 0 || correctQuestions.length > 0) && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div className="bg-gradient-to-r from-red-50 to-red-100 rounded-2xl p-6 border border-red-200">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="bg-red-500 p-2 rounded-lg">
+                  <XCircle className="w-6 h-6 text-white" />
+                </div>
+                <h3 className="text-lg font-semibold text-red-800">Wrong Questions</h3>
+              </div>
+              <p className="text-3xl font-bold text-red-900">{wrongQuestions.length}</p>
+              <p className="text-sm text-red-600 mt-1">Marked as is_wrong = true</p>
+              {wrongQuestions.length > 0 && (
+                <button
+                  onClick={deleteWrongQuestions}
+                  className="mt-4 flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete All Wrong Questions
+                </button>
+              )}
+            </div>
+            
+            <div className="bg-gradient-to-r from-green-50 to-green-100 rounded-2xl p-6 border border-green-200">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="bg-green-500 p-2 rounded-lg">
+                  <CheckCircle className="w-6 h-6 text-white" />
+                </div>
+                <h3 className="text-lg font-semibold text-green-800">Correct Questions</h3>
+              </div>
+              <p className="text-3xl font-bold text-green-900">{correctQuestions.length}</p>
+              <p className="text-sm text-green-600 mt-1">Marked as is_wrong = false</p>
+            </div>
+          </div>
+        )}
+
+        {/* Wrong Questions Display */}
+        {wrongQuestions.length > 0 && (
+          <div className="bg-white rounded-2xl shadow-xl p-8 mb-8">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-2xl font-bold text-red-800">
-                ❌ Wrong Questions Found ({wrongQuestions.length})
+                ❌ Wrong Questions ({wrongQuestions.length})
               </h2>
-              <button
-                onClick={deleteAllWrongQuestions}
-                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg font-medium shadow-lg hover:shadow-xl transform hover:scale-105 transition-all"
-              >
-                <Trash2 className="w-4 h-4" />
-                Delete All Wrong Questions
-              </button>
             </div>
             
             <div className="space-y-6">
-              {wrongQuestions.map((question, index) => (
+              {wrongQuestions.slice(0, 10).map((question, index) => (
                 <div key={question.id} className="border border-red-200 rounded-xl p-6 bg-red-50">
                   {/* Error Info */}
                   <div className="mb-4 p-3 bg-red-100 border border-red-300 rounded-lg">
                     <div className="flex items-center gap-2 mb-2">
                       <AlertTriangle className="w-5 h-5 text-red-600" />
-                      <span className="font-semibold text-red-800">Validation Error</span>
-                      <span className="text-sm text-red-600">
-                        (Confidence: {(question.confidence * 100).toFixed(0)}%)
-                      </span>
+                      <span className="font-semibold text-red-800">Marked as Wrong in Database</span>
                     </div>
-                    <p className="text-red-700">{question.reason}</p>
+                    <p className="text-red-700">This question has been marked as is_wrong = true</p>
                   </div>
 
                   {/* Question Preview */}
@@ -696,49 +638,74 @@ export function WrongQuestionRemover() {
                     index={index + 1}
                     showControls={false}
                   />
+                </div>
+              ))}
+              
+              {wrongQuestions.length > 10 && (
+                <div className="text-center p-4 bg-gray-50 rounded-lg">
+                  <p className="text-gray-600">
+                    Showing first 10 wrong questions. Total: {wrongQuestions.length}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
-                  {/* Action Button */}
-                  <div className="mt-4 flex justify-end">
-                    <button
-                      onClick={() => deleteWrongQuestion(question.id)}
-                      className="flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      Delete This Question
-                    </button>
+        {/* Correct Questions Sample Display */}
+        {correctQuestions.length > 0 && (
+          <div className="bg-white rounded-2xl shadow-xl p-8">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-green-800">
+                ✅ Sample Correct Questions (showing {Math.min(correctQuestions.length, 5)})
+              </h2>
+            </div>
+            
+            <div className="space-y-6">
+              {correctQuestions.slice(0, 5).map((question, index) => (
+                <div key={question.id} className="border border-green-200 rounded-xl p-6 bg-green-50">
+                  {/* Success Info */}
+                  <div className="mb-4 p-3 bg-green-100 border border-green-300 rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <CheckCircle className="w-5 h-5 text-green-600" />
+                      <span className="font-semibold text-green-800">Marked as Correct in Database</span>
+                    </div>
+                    <p className="text-green-700">This question has been marked as is_wrong = false</p>
                   </div>
+
+                  {/* Question Preview */}
+                  <QuestionPreview
+                    question={{
+                      question_statement: question.question_statement,
+                      question_type: question.question_type,
+                      options: question.options,
+                      page_number: 1,
+                      answer: question.answer,
+                      solution: question.solution
+                    } as ExtractedQuestion}
+                    index={index + 1}
+                    showControls={false}
+                  />
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* No Wrong Questions Found */}
-        {!progress.isValidating && wrongQuestions.length === 0 && progress.questionsValidated > 0 && (
+        {/* No Results */}
+        {!progress.isValidating && wrongQuestions.length === 0 && correctQuestions.length === 0 && progress.questionsValidated === 0 && (
           <div className="bg-white rounded-2xl shadow-xl p-8 text-center">
             <div className="flex items-center justify-center mb-4">
-              <div className="bg-green-100 p-4 rounded-full">
-                <CheckCircle className="w-12 h-12 text-green-600" />
+              <div className="bg-blue-100 p-4 rounded-full">
+                <Database className="w-12 h-12 text-blue-600" />
               </div>
             </div>
-            <h2 className="text-2xl font-bold text-green-800 mb-2">
-              🎉 All Questions Are Valid!
+            <h2 className="text-2xl font-bold text-blue-800 mb-2">
+              Ready to Validate Questions
             </h2>
-            <p className="text-green-600">
-              Validated {progress.questionsValidated} questions using {
-                validationMode === 'ai_comprehensive' ? 'comprehensive AI validation' :
-                validationMode === 'auto' ? 'automatic validation' :
-                'manual validation'
-              } and found no errors.
+            <p className="text-blue-600">
+              Select a course and start AI validation to analyze all questions and update the is_wrong column.
             </p>
-            {validationMode === 'ai_comprehensive' && (
-              <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
-                <div className="flex items-center justify-center gap-2 text-purple-800">
-                  <Brain className="w-5 h-5" />
-                  <span className="font-medium">AI verified each question by solving it step-by-step</span>
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>

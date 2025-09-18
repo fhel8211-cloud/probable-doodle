@@ -1270,3 +1270,163 @@ RESPONSE FORMAT (JSON only):
   
   return { isWrong: false, reason: 'AI validation failed after all retries - assuming question is correct', confidence: 0.3 };
 }
+
+// New comprehensive validation function specifically for the is_wrong column update
+export async function validateQuestionWithGeminiAI(question: any): Promise<{ isWrong: boolean; reason: string; confidence: number }> {
+  const maxRetries = API_KEYS.length;
+  let retryCount = 0;
+  
+  while (retryCount < maxRetries) {
+    try {
+      const apiKey = getNextApiKey();
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ 
+        model: 'gemini-1.5-flash',
+        generationConfig: {
+          temperature: 0.1,
+          topK: 1,
+          topP: 0.8,
+        }
+      });
+
+      let validationPrompt = '';
+      
+      switch (question.question_type) {
+        case 'MCQ':
+          validationPrompt = `
+You are an expert question validator. Analyze this MCQ question VERY CAREFULLY.
+
+QUESTION: ${question.question_statement}
+OPTIONS: ${question.options ? question.options.map((opt, idx) => `${String.fromCharCode(65 + idx)}) ${opt}`).join('\n') : 'No options provided'}
+PROVIDED ANSWER: ${question.answer}
+
+CRITICAL VALIDATION RULES FOR MCQ:
+1. Solve the question step by step mathematically/logically
+2. Determine which option(s) contain the correct answer
+3. For MCQ: EXACTLY ONE option should be correct
+4. Check if the provided answer (${question.answer}) matches the correct option letter
+5. If NO options are correct → WRONG
+6. If MORE than one option is correct → WRONG  
+7. If provided answer doesn't match the single correct option → WRONG
+8. If provided answer is not A/B/C/D/E → WRONG
+9. If question cannot be solved → WRONG
+
+RESPONSE FORMAT (JSON only):
+{
+  "isWrong": true/false,
+  "reason": "Detailed explanation of why question is wrong or correct",
+  "confidence": 0.95
+}
+`;
+          break;
+          
+        case 'MSQ':
+          validationPrompt = `
+You are an expert question validator. Analyze this MSQ question VERY CAREFULLY.
+
+QUESTION: ${question.question_statement}
+OPTIONS: ${question.options ? question.options.map((opt, idx) => `${String.fromCharCode(65 + idx)}) ${opt}`).join('\n') : 'No options provided'}
+PROVIDED ANSWER: ${question.answer}
+
+CRITICAL VALIDATION RULES FOR MSQ:
+1. Solve the question step by step mathematically/logically
+2. Determine which option(s) contain the correct answer
+3. For MSQ: One or more options can be correct
+4. Check if the provided answer includes ALL correct options
+5. If NO options are correct → WRONG
+6. If provided answer misses correct options → WRONG
+7. If provided answer includes incorrect options → WRONG
+8. If provided answer contains invalid letters → WRONG
+9. If question cannot be solved → WRONG
+
+RESPONSE FORMAT (JSON only):
+{
+  "isWrong": true/false,
+  "reason": "Detailed explanation of why question is wrong or correct",
+  "confidence": 0.95
+}
+`;
+          break;
+          
+        case 'NAT':
+          validationPrompt = `
+You are an expert question validator. Analyze this NAT question VERY CAREFULLY.
+
+QUESTION: ${question.question_statement}
+PROVIDED ANSWER: ${question.answer}
+
+CRITICAL VALIDATION RULES FOR NAT:
+1. Solve the mathematical problem step by step
+2. Calculate the exact numerical answer
+3. Check if provided answer is a valid number
+4. Compare calculated answer with provided answer
+5. Allow small rounding differences (±0.1 for decimals)
+6. If provided answer is not numerical → WRONG
+7. If calculated answer differs significantly → WRONG
+8. If question cannot be solved mathematically → WRONG
+9. If question is ambiguous → WRONG
+
+RESPONSE FORMAT (JSON only):
+{
+  "isWrong": true/false,
+  "reason": "Detailed explanation with your calculated answer vs provided answer",
+  "confidence": 0.95
+}
+`;
+          break;
+          
+        case 'Subjective':
+          // Subjective questions are always considered correct
+          return {
+            isWrong: false,
+            reason: 'Subjective questions are always considered valid',
+            confidence: 1.0
+          };
+          
+        default:
+          return { isWrong: true, reason: 'Unknown question type', confidence: 1.0 };
+      }
+
+      const result = await model.generateContent([validationPrompt]);
+      const response = await result.response;
+      const text = response.text();
+      
+      // Robust JSON extraction
+      const jsonContent = extractJsonFromText(text);
+      if (!jsonContent) {
+        return { isWrong: false, reason: 'AI validation failed - assuming question is correct', confidence: 0.5 };
+      }
+
+      try {
+        const validation = JSON.parse(jsonContent);
+        return {
+          isWrong: validation.isWrong || false,
+          reason: validation.reason || 'AI validation completed',
+          confidence: validation.confidence || 0.8
+        };
+      } catch (parseError) {
+        console.error('JSON parsing error for Gemini AI validation:', parseError);
+        return { isWrong: false, reason: 'AI validation parsing failed - assuming question is correct', confidence: 0.5 };
+      }
+
+    } catch (error: any) {
+      retryCount++;
+      console.error(`Error with API key ${retryCount} for Gemini AI validation:`, error);
+      
+      if (error.message?.includes('429') || error.message?.includes('quota')) {
+        console.log(`API key ${retryCount} hit rate limit for Gemini AI validation, trying next key...`);
+        if (retryCount < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          continue;
+        }
+      }
+      
+      if (retryCount >= maxRetries) {
+        console.error(`All ${maxRetries} API keys exhausted for Gemini AI validation: ${error.message}`);
+        return { isWrong: false, reason: 'AI validation failed after all retries - assuming question is correct', confidence: 0.3 };
+      }
+    }
+  }
+  
+  return { isWrong: false, reason: 'AI validation failed after all retries - assuming question is correct', confidence: 0.3 };
+}

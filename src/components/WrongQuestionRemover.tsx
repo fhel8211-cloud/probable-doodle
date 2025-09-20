@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { AlertTriangle, Trash2, Eye, CheckCircle, XCircle, RefreshCw, Database, Zap, Settings, Play, Pause } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { validateQuestionWithGeminiAI, ExtractedQuestion } from '../lib/gemini';
+import { validateQuestionWithDeepSeekAI, ExtractedQuestion } from '../lib/gemini';
 import { QuestionPreview } from './QuestionPreview';
 import toast, { Toaster } from 'react-hot-toast';
 
@@ -220,10 +220,10 @@ export function WrongQuestionRemover() {
         }));
 
         try {
-          toast(`🤖 AI validating ${question.question_type} question ${i + 1}/${questions.length}...`, { duration: 2000 });
+          toast(`🤖 DeepSeek validating ${question.question_type} question ${i + 1}/${questions.length}...`, { duration: 2000 });
           
-          // Use comprehensive Gemini AI validation
-          const validation = await validateQuestionWithGeminiAI(question);
+          // Use comprehensive DeepSeek AI validation
+          const validation = await validateQuestionWithDeepSeekAI(question);
           
           // Update the is_wrong column in database
           const { error: updateError } = await supabase
@@ -400,7 +400,7 @@ export function WrongQuestionRemover() {
           <div className="flex items-center justify-center gap-8 mt-8 text-sm text-gray-500">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-red-500" />
-              <span>Comprehensive AI Validation</span>
+              <span>DeepSeek AI Validation</span>
             </div>
             <div className="flex items-center gap-2">
               <Zap className="w-5 h-5 text-orange-500" />
@@ -470,7 +470,7 @@ export function WrongQuestionRemover() {
                   </div>
                   <div className="flex items-center gap-2">
                     <Zap className="w-4 h-4 text-blue-600" />
-                    <span className="text-blue-700">AI Validation: <strong>Comprehensive</strong></span>
+                    <span className="text-blue-700">DeepSeek Validation: <strong>Comprehensive</strong></span>
                   </div>
                   <div className="flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4 text-blue-600" />
@@ -530,7 +530,7 @@ export function WrongQuestionRemover() {
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-lg font-medium text-red-900">
-                  🤖 AI Validating Questions
+                  🤖 DeepSeek Validating Questions
                   {progress.isPaused && ' (Paused)'}
                 </h3>
                 <span className="text-sm font-medium text-red-700">

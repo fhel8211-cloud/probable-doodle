@@ -331,7 +331,7 @@ export function QuestionGenerator() {
           attempts++;
           
           try {
-            toast(`🧠 Generating question ${questionIndex + 1}/${topic.questionsToGenerate} for ${topic.name} (attempt ${attempts})...`, { duration: 2000 });
+            toast(`🧠 DeepSeek generating question ${questionIndex + 1}/${topic.questionsToGenerate} for ${topic.name} (attempt ${attempts})...`, { duration: 2000 });
 
             const generatedQuestions = await generateQuestionsForTopic(
               topic,
@@ -504,7 +504,7 @@ export function QuestionGenerator() {
       }));
 
       try {
-        toast(`🧠 Generating solution for PYQ ${i + 1}/${pyqsWithoutSolutions.length}...`, { duration: 2000 });
+        toast(`🧠 DeepSeek generating solution for PYQ ${i + 1}/${pyqsWithoutSolutions.length}...`, { duration: 2000 });
 
         const solutions = await generateSolutionsForPYQs([pyq], pyq.topics.notes);
 
@@ -590,7 +590,7 @@ export function QuestionGenerator() {
           <div className="flex items-center justify-center gap-8 mt-8 text-sm text-gray-500">
             <div className="flex items-center gap-2">
               <Brain className="w-5 h-5 text-purple-500" />
-              <span>AI-Powered</span>
+              <span>DeepSeek-Powered</span>
             </div>
             <div className="flex items-center gap-2">
               <Target className="w-5 h-5 text-indigo-500" />
@@ -892,7 +892,7 @@ export function QuestionGenerator() {
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-lg font-medium text-blue-900">
-                  🤖 {progress.stage === 'questions' ? 'Generating Questions' : 'Generating Solutions'}
+                  🤖 DeepSeek {progress.stage === 'questions' ? 'Generating Questions' : 'Generating Solutions'}
                   {progress.isPaused && ' (Paused)'}
                 </h3>
                 <span className="text-sm font-medium text-blue-700">

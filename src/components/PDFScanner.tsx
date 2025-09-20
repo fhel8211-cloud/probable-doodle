@@ -220,7 +220,7 @@ export function PDFScanner() {
         const images = await convertPdfToImages(file!);
         setScanProgress(prev => ({ ...prev, totalPages: images.length }));
         
-        toast.success(`Processing ${images.length} pages of PDF ${pdfIndex + 1} with AI vision...`);
+        toast.success(`Processing ${images.length} pages of PDF ${pdfIndex + 1} with DeepSeek vision...`);
 
         const pdfQuestions: ExtractedQuestion[] = [];
         let previousContext = '';
@@ -232,7 +232,7 @@ export function PDFScanner() {
           setScanProgress(prev => ({ ...prev, currentPage: pageNum }));
 
           try {
-            toast(`🔍 PDF ${pdfIndex + 1}: Analyzing page ${pageNum}/${images.length}...`, { duration: 2000 });
+            toast(`🔍 PDF ${pdfIndex + 1}: DeepSeek analyzing page ${pageNum}/${images.length}...`, { duration: 2000 });
             
             const questions = await performExtraction(images[i], pageNum, previousContext, currentPdfMemory);
 
@@ -518,7 +518,7 @@ export function PDFScanner() {
           <div className="flex items-center justify-center gap-8 mt-8 text-sm text-gray-500">
             <div className="flex items-center gap-2">
               <Eye className="w-5 h-5 text-purple-500" />
-              <span>Vision AI</span>
+              <span>DeepSeek Vision</span>
             </div>
             <div className="flex items-center gap-2">
               <BookOpen className="w-5 h-5 text-indigo-500" />
